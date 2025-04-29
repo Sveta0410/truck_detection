@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Счётчик грузовиков - Логистический терминал</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .container {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+        .image-section {
+            display: flex;
+            gap: 20px;
+            display: none; /* Скрыто по умолчанию */
+        }
+        .image-box {
+            flex: 1;
+            border: 1px solid #ddd;
+            padding: 10px;
+            text-align: center;
+        }
+        .image-box img {
+            max-width: 100%;
+            max-height: 400px;
+        }
+        .stats {
+            background-color: #f5f5f5;
+            padding: 15px;
+            border-radius: 5px;
+            display: none; /* Скрыто по умолчанию */
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 15px
+        }
+        th, td {
+            border: 1px solid #ddd;
+            padding: 8px;
+            text-align: left;
+        }
+        th {
+            background-color: #f2f2f2;
+        }
+        button {
+            padding: 10px 15px;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        button:hover {
+            background-color: #45a049;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Учет грузовиков на терминале логистического центра</h1>
+
+        <div>
+            <h2>Загрузка изображения</h2>
+            <input type="file" id="imageUpload" accept="image/*">
+            <button onclick="processImage()">Обработать изображение</button>
+        </div>
+
+        <div class="image-section" id="imageSection">
+            <div class="image-box">
+                <h3>Исходное изображение</h3>
+                <img id="originalImage" src="" alt="Исходное изображение">
+            </div>
+            <div class="image-box">
+                <h3>Обработанное изображение</h3>
+                <img id="processedImage" src="" alt="Обработанное изображение">
+            </div>
+        </div>
+
+        <div class="stats" id="statsSection">
+            <h2>Результаты обработки изображения</h2>
+            <p>Обнаружено грузовиков: <span id="truckCount">0</span></p>
+            <div id="detectionDetails"></div>
+        </div>
+
+        <div>
+            <h2>История обработки изображений</h2>
+            <div>
+                <button onclick="exportExcel()">Экспорт в Excel</button>
+                <button onclick="exportPDF()">Экспорт в PDF</button>
+            </div>
+            <table id="historyTable">
+                <thead>
+                    <tr>
+                        <th>Дата и время</th>
+                        <th>Имя файла</th>
+                        <th>Количество грузовиков</th>
+                    </tr>
+                </thead>
+                <tbody></tbody>
+            </table>
+        </div>
+    </div>
+
+    <script>
+        async function processImage() {
+            const fileInput = document.getElementById('imageUpload');
+            if (!fileInput.files || fileInput.files.length === 0) {
+                alert('Пожалуйста, выберите изображение');
+                return;
+            }
+
+            const formData = new FormData();
+            formData.append('file', fileInput.files[0]);
+
+            try {
+                const response = await fetch('/upload', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                const data = await response.json();
+                updateResults(data);
+                loadHistory();
+
+                // Показываем скрытые блоки после успешной обработки
+                document.getElementById('imageSection').style.display = 'flex';
+                document.getElementById('statsSection').style.display = 'block';
+            } catch (error) {
+                console.error('Ошибка:', error);
+                alert('Ошибка при обработке изображения');
+            }
+        }
+
+        function updateResults(data) {
+            document.getElementById('originalImage').src = data.original_image;
+            document.getElementById('processedImage').src = data.processed_image;
+            document.getElementById('truckCount').textContent = data.truck_count;
+
+            const detailsDiv = document.getElementById('detectionDetails');
+            detailsDiv.innerHTML = '<h3>Детали:</h3>';
+
+            if (data.detections && data.detections.length > 0) {
+                const ul = document.createElement('ul');
+                data.detections.forEach(det => {
+                    const li = document.createElement('li');
+                    li.textContent = `Грузовик с уверенностью ${det.confidence.toFixed(2)} в координатах [${det.bbox.map(x => x.toFixed(0)).join(', ')}]`;
+                    ul.appendChild(li);
+                });
+                detailsDiv.appendChild(ul);
+            } else {
+                detailsDiv.innerHTML += '<p>Грузовики не обнаружены</p>';
+            }
+        }
+
+        async function loadHistory() {
+            try {
+                const response = await fetch('/history');
+                const data = await response.json();
+
+                const tbody = document.querySelector('#historyTable tbody');
+                tbody.innerHTML = '';
+
+                data.forEach(item => {
+                    const row = document.createElement('tr');
+                    row.innerHTML = `
+                        <td>${new Date(item.timestamp).toLocaleString()}</td>
+                        <td>${item.filename}</td>
+                        <td>${item.truck_count}</td>
+                    `;
+                    tbody.appendChild(row);
+                });
+            } catch (error) {
+                console.error('Ошибка загрузки истории:', error);
+            }
+        }
+
+        async function exportExcel() {
+            window.open('/export/excel', '_blank');
+        }
+
+        async function exportPDF() {
+            window.open('/export/pdf', '_blank');
+        }
+
+        // Загружаем историю при загрузке страницы
+        document.addEventListener('DOMContentLoaded', loadHistory);
+    </script>
+</body>
+</html>
