@@ -61,59 +61,276 @@
         button:hover {
             background-color: #45a049;
         }
+        .processing-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.5);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            z-index: 1000;
+            display: none;
+        }
+        .processing-content {
+            background-color: white;
+            padding: 30px;
+            border-radius: 8px;
+            text-align: center;
+        }
+        .spinner {
+            border: 5px solid #f3f3f3;
+            border-top: 5px solid #3498db;
+            border-radius: 50%;
+            width: 50px;
+            height: 50px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 20px;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        .status-message {
+            margin-top: 10px;
+            padding: 10px;
+            border-radius: 4px;
+            display: none;
+        }
+        .error {
+            background-color: #f2dede;
+            color: #a94442;
+            display: block;
+        }
+        .tab {
+            overflow: hidden;
+        }
+        .tab button {
+            background-color: inherit;
+            float: left;
+            border: none;
+            outline: none;
+            cursor: pointer;
+            padding: 14px 16px;
+            transition: 0.3s;
+            color: #333;
+            font-size: 16px;
+            font-weight: bold;
+        }
+        .tab button:hover {
+            background-color: #ddd;
+        }
+        .tab button.active {
+            background-color: #4CAF50;
+            color: white;
+        }
+        .tabcontent {
+            display: none;
+            padding: 20px;
+            animation: fadeEffect 1s;
+        }
+        @keyframes fadeEffect {
+            from {opacity: 0;}
+            to {opacity: 1;}
+        }
     </style>
 </head>
 <body>
     <div class="container">
         <h1>Учет грузовиков на терминале логистического центра</h1>
 
-        <div>
-            <h2>Загрузка изображения</h2>
-            <input type="file" id="imageUpload" accept="image/*">
-            <button onclick="processImage()">Обработать изображение</button>
+        <div class="tab">
+            <button class="tablinks active" onclick="openTab(event, 'imageTab')">Обработка изображений</button>
+            <button class="tablinks" onclick="openTab(event, 'videoTab')">Обработка видео</button>
+            <button class="tablinks" onclick="openTab(event, 'streamTab')">Стрим</button>
         </div>
 
-        <div class="image-section" id="imageSection">
-            <div class="image-box">
-                <h3>Исходное изображение</h3>
-                <img id="originalImage" src="" alt="Исходное изображение">
-            </div>
-            <div class="image-box">
-                <h3>Обработанное изображение</h3>
-                <img id="processedImage" src="" alt="Обработанное изображение">
-            </div>
-        </div>
-
-        <div class="stats" id="statsSection">
-            <h2>Результаты обработки изображения</h2>
-            <p>Обнаружено грузовиков: <span id="truckCount">0</span></p>
-            <div id="detectionDetails"></div>
-        </div>
-
-        <div>
-            <h2>История обработки изображений</h2>
+        <!-- Вкладка обработки изображений -->
+        <div id="imageTab" class="tabcontent" style="display: block;">
             <div>
-                <button onclick="exportExcel()">Экспорт в Excel</button>
-                <button onclick="exportPDF()">Экспорт в PDF</button>
+<!--                <h2>Загрузка изображения</h2>-->
+                <input type="file" id="imageUpload" accept="image/*">
+                <button onclick="processImage()">Запуск обработки</button>
+                <div id="imageStatus" class="status-message"></div>
             </div>
-            <table id="historyTable">
-                <thead>
-                    <tr>
-                        <th>Дата и время</th>
-                        <th>Имя файла</th>
-                        <th>Количество грузовиков</th>
-                    </tr>
-                </thead>
-                <tbody></tbody>
-            </table>
+
+            <div class="image-section" id="imageSection">
+                <div class="image-box">
+                    <h3>Исходное изображение</h3>
+                    <img id="originalImage" src="" alt="Исходное изображение">
+                </div>
+                <div class="image-box">
+                    <h3>Обработанное изображение</h3>
+                    <img id="processedImage" src="" alt="Обработанное изображение">
+                </div>
+            </div>
+            <div class="stats" id="statsSection">
+                <h2>Результаты обработки изображения</h2>
+                <p>Обнаружено грузовиков: <span id="truckCount">0</span></p>
+                <div id="detectionDetails"></div>
+            </div>
+            <div>
+                <h3>История обработки изображений</h3>
+                <div>
+                    <button onclick="exportExcel('detections')">Экспорт в Excel</button>
+                    <button onclick="exportPDF('image')">Экспорт в PDF</button>
+                </div>
+                <table id="imageHistoryTable">
+                    <thead>
+                        <tr>
+                            <th>Дата и время</th>
+                            <th>Имя файла</th>
+                            <th>Количество грузовиков</th>
+                        </tr>
+                    </thead>
+                    <tbody></tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- Вкладка обработки видео -->
+        <div id="videoTab" class="tabcontent">
+            <div>
+
+                <input type="file" id="videoInput" accept="video/*">
+                <button onclick="processVideo()">Запуск обработки</button>
+                <div id="videoStatus" class="status-message"></div>
+
+            </div>
+
+            <div class="image-section" id="statsSectionVideo" style="display: none;">
+                <h2>Обработанное видео</h2>
+                <video id="processedVideo" width="640" height="360" controls style="max-width: 100%"></video>
+                <table id="videoResTable">
+                    <thead>
+                        <tr>
+                            <th>Номер грузовика</th>
+                            <th>Время появления в кадре</th>
+                            <th>Время покидания кадра</th>
+                        </tr>
+                    </thead>
+                    <tbody></tbody>
+                </table>
+            </div>
+            <div>
+                <h3>История обработки видео</h3>
+                <div>
+                    <button onclick="exportExcel('video_detections')">Экспорт в Excel</button>
+                    <button onclick="exportPDF('video')">Экспорт в PDF</button>
+                </div>
+                <table id="videoHistoryTable">
+                    <thead>
+                        <tr>
+                            <th>Дата и время</th>
+                            <th>Имя файла</th>
+                            <th>Номер грузовика</th>
+                            <th>Время появления в кадре</th>
+                            <th>Время покидания кадра</th>
+                        </tr>
+                    </thead>
+                    <tbody></tbody>
+                </table>
+            </div>
+
+        </div>
+
+        <div id="streamTab" class="tabcontent">
+            <div>
+                <h2>Стрим</h2>
+
+            </div>
+        </div>
+    </div>
+
+    <div class="processing-overlay" id="processingOverlay">
+        <div class="processing-content">
+            <div class="spinner"></div>
+            <h2>Идёт обработка...</h2>
+            <p>Пожалуйста, подождите.</p>
         </div>
     </div>
 
     <script>
+        function openTab(evt, tabName) {
+            var i, tabcontent, tablinks;
+
+            // Скрываем все вкладки
+            tabcontent = document.getElementsByClassName("tabcontent");
+            for (i = 0; i < tabcontent.length; i++) {
+                tabcontent[i].style.display = "none";
+            }
+
+            // Убираем активный класс со всех кнопок
+            tablinks = document.getElementsByClassName("tablinks");
+            for (i = 0; i < tablinks.length; i++) {
+                tablinks[i].className = tablinks[i].className.replace(" active", "");
+            }
+
+            // Показываем текущую вкладку и делаем кнопку активной
+            document.getElementById(tabName).style.display = "block";
+            evt.currentTarget.className += " active";
+        }
+
+        async function processVideo() {
+            const fileInput = document.getElementById('videoInput');
+            const statusDiv = document.getElementById('videoStatus');
+            statusDiv.style.display = 'none';
+
+            if (!fileInput.files || fileInput.files.length === 0) {
+                statusDiv.textContent = 'Пожалуйста, выберите видеофайл';
+                statusDiv.className = 'status-message error';
+                statusDiv.style.display = 'block';
+                return;
+            }
+
+            // Показываем оверлей обработки
+            document.getElementById('processingOverlay').style.display = 'flex';
+
+            // Отправляем на обработку
+            const formData = new FormData();
+            formData.append('file', fileInput.files[0]);
+
+            try {
+                const response = await fetch('/process_video', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                if (!response.ok) {
+                    throw new Error('Ошибка сервера');
+                }
+
+                const result = await response.json();
+
+                // Показываем обработанное видео
+                const processedVideo = document.getElementById('processedVideo');
+                processedVideo.src = result.processed_video;
+                document.getElementById('statsSectionVideo').style.display = 'block';
+                loadVideoInfo(result.detection_data);
+                loadVideoHistory();
+
+            } catch (error) {
+                console.error('Ошибка обработки видео:', error);
+                statusDiv.textContent = 'Произошла ошибка при обработке видео';
+                statusDiv.className = 'status-message error';
+                statusDiv.style.display = 'block';
+            } finally {
+                // Скрываем оверлей обработки
+                document.getElementById('processingOverlay').style.display = 'none';
+            }
+        }
+
         async function processImage() {
             const fileInput = document.getElementById('imageUpload');
+            const statusDiv = document.getElementById('imageStatus');
+            statusDiv.style.display = 'none';
+
             if (!fileInput.files || fileInput.files.length === 0) {
-                alert('Пожалуйста, выберите изображение');
+                statusDiv.textContent = 'Пожалуйста, выберите изображение';
+                statusDiv.className = 'status-message error';
+                statusDiv.style.display = 'block';
                 return;
             }
 
@@ -121,21 +338,23 @@
             formData.append('file', fileInput.files[0]);
 
             try {
-                const response = await fetch('/upload', {
+                const response = await fetch('/upload_image', {
                     method: 'POST',
                     body: formData
                 });
 
                 const data = await response.json();
                 updateResults(data);
-                loadHistory();
+                loadImageHistory();
 
                 // Показываем скрытые блоки после успешной обработки
                 document.getElementById('imageSection').style.display = 'flex';
                 document.getElementById('statsSection').style.display = 'block';
             } catch (error) {
                 console.error('Ошибка:', error);
-                alert('Ошибка при обработке изображения');
+                statusDiv.textContent = 'Произошла ошибка при обработке изображения';
+                statusDiv.className = 'status-message error';
+                statusDiv.style.display = 'block';
             }
         }
 
@@ -160,12 +379,12 @@
             }
         }
 
-        async function loadHistory() {
+        async function loadImageHistory() {
             try {
                 const response = await fetch('/history');
                 const data = await response.json();
 
-                const tbody = document.querySelector('#historyTable tbody');
+                const tbody = document.querySelector('#imageHistoryTable tbody');
                 tbody.innerHTML = '';
 
                 data.forEach(item => {
@@ -181,17 +400,56 @@
                 console.error('Ошибка загрузки истории:', error);
             }
         }
+        async function loadVideoHistory() {
+            try {
+                const response = await fetch('/video_history');
+                const data = await response.json();
 
-        async function exportExcel() {
-            window.open('/export/excel', '_blank');
+                const tbody = document.querySelector('#videoHistoryTable tbody');
+                tbody.innerHTML = '';
+
+                data.forEach(item => {
+                    const row = document.createElement('tr');
+                    row.innerHTML = `
+                        <td>${new Date(item.timestamp).toLocaleString()}</td>
+                        <td>${item.video_name}</td>
+                        <td>${item.truck_id}</td>
+                        <td>${item.appearance_time}</td>
+                        <td>${item.disappearance_time}</td>
+                    `;
+                    tbody.appendChild(row);
+                });
+            } catch (error) {
+                console.error('Ошибка загрузки истории:', error);
+            }
         }
 
-        async function exportPDF() {
-            window.open('/export/pdf', '_blank');
+        async function loadVideoInfo(data) {
+            const tbody = document.querySelector('#videoResTable tbody');
+            tbody.innerHTML = '';
+
+            data.forEach(item => {
+                const row = document.createElement('tr');
+                row.innerHTML = `
+                    <td>${item.truck_id}</td>
+                    <td>${item.appearance_time}</td>
+                    <td>${item.disappearance_time}</td>
+                `;
+                tbody.appendChild(row);
+           });
+        }
+
+        async function exportExcel(tableName) {
+            window.open(`/export/excel/${tableName}`, '_blank');
+        }
+
+        async function exportPDF(tableType) {
+            window.open(`/export/pdf/${tableType}`, '_blank');
         }
 
         // Загружаем историю при загрузке страницы
-        document.addEventListener('DOMContentLoaded', loadHistory);
+        document.addEventListener('DOMContentLoaded', loadImageHistory);
+        document.addEventListener('DOMContentLoaded', loadVideoHistory);
     </script>
 </body>
 </html>
