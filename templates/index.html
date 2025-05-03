@@ -144,7 +144,7 @@
         <div class="tab">
             <button class="tablinks active" onclick="openTab(event, 'imageTab')">Обработка изображений</button>
             <button class="tablinks" onclick="openTab(event, 'videoTab')">Обработка видео</button>
-            <button class="tablinks" onclick="openTab(event, 'streamTab')">Стрим</button>
+            <button class="tablinks" onclick="openTab(event, 'streamTab')">Обработка стрима с открытой камеры</button>
         </div>
 
         <!-- Вкладка обработки изображений -->
@@ -236,11 +236,33 @@
 
         </div>
 
-        <div id="streamTab" class="tabcontent">
-            <div>
-                <h2>Стрим</h2>
+    <div id="streamTab" class="tabcontent">
+        <div>
+            <button id="startStreamBtn" onclick="startStream()">Запустить стрим</button>
+            <button id="stopStreamBtn" onclick="stopStream()" disabled>Остановить стрим</button>
+            <div id="streamStatus" class="status-message"></div>
+        </div>
 
+        <div id="streamContainer" style="display: none; margin-top: 20px;">
+            <img id="streamFrame" src="" alt="Поток с камеры" style="max-width: 100%;">
+        </div>
+        <div>
+            <h3>История стримов</h3>
+            <div>
+                <button onclick="exportExcel('stream_detections')">Экспорт в Excel</button>
+                <button onclick="exportPDF('stream')">Экспорт в PDF</button>
             </div>
+            <table id="streamHistoryTable">
+                <thead>
+                    <tr>
+                        <th>Начало стрима</th>
+                        <th>Конец стрима</th>
+                        <th>Среднее количество грузовиков</th>
+                        <th>Обработано кадров</th>
+                    </tr>
+                </thead>
+                <tbody></tbody>
+            </table>
         </div>
     </div>
 
@@ -253,6 +275,76 @@
     </div>
 
     <script>
+        let streamInterval;
+        let isStreaming = false;
+        let streamId = null;
+
+        async function startStream() {
+            if (isStreaming) return;
+
+            const statusDiv = document.getElementById('streamStatus');
+            statusDiv.style.display = 'none';
+
+            try {
+                // Генерируем уникальный ID для стрима
+                streamId = 'stream_' + Math.random().toString(36).substr(2, 9);
+                document.getElementById('streamFrame').src = `/stream_feed?stream_id=${streamId}`;
+                document.getElementById('streamContainer').style.display = 'block';
+                document.getElementById('startStreamBtn').disabled = true;
+                document.getElementById('stopStreamBtn').disabled = false;
+                isStreaming = true;
+
+            } catch (error) {
+                console.error('Ошибка запуска потока:', error);
+                statusDiv.textContent = 'Ошибка запуска видеопотока';
+                statusDiv.className = 'status-message error';
+                statusDiv.style.display = 'block';
+            }
+        }
+
+        async function stopStream() {
+            if (!isStreaming) return;
+            try {
+                await fetch(`/stop_stream/${streamId}`);
+            } catch (error) {
+                console.error('Ошибка при остановке стрима:', error);
+            }
+
+            // Останавливаем поток
+            document.getElementById('streamFrame').src = '';
+            document.getElementById('streamContainer').style.display = 'none';
+            document.getElementById('startStreamBtn').disabled = false;
+            document.getElementById('stopStreamBtn').disabled = true;
+            isStreaming = false;
+
+            if (streamInterval) {
+                clearInterval(streamInterval);
+            }
+            loadStreamHistory();
+        }
+
+        async function loadStreamHistory() {
+            try {
+                const response = await fetch('/stream_history');
+                const data = await response.json();
+
+                const tbody = document.querySelector('#streamHistoryTable tbody');
+                tbody.innerHTML = '';
+
+                data.forEach(item => {
+                    const row = document.createElement('tr');
+                    row.innerHTML = `
+                        <td>${new Date(item.stream_start).toLocaleString()}</td>
+                        <td>${new Date(item.stream_end).toLocaleString()}</td>
+                        <td>${item.truck_avg_count.toFixed(2)}</td>
+                        <td>${item.frames_processed}</td>
+                    `;
+                    tbody.appendChild(row);
+                });
+            } catch (error) {
+                console.error('Ошибка загрузки истории стримов:', error);
+            }
+        }
         function openTab(evt, tabName) {
             var i, tabcontent, tablinks;
 
@@ -450,6 +542,7 @@
         // Загружаем историю при загрузке страницы
         document.addEventListener('DOMContentLoaded', loadImageHistory);
         document.addEventListener('DOMContentLoaded', loadVideoHistory);
+        document.addEventListener('DOMContentLoaded', loadStreamHistory);
     </script>
 </body>
 </html>

@@ -1,4 +1,5 @@
 import os
+from threading import Lock
 
 import cv2
 import json
@@ -10,6 +11,7 @@ from fastapi import FastAPI, UploadFile, File, Request, HTTPException
 from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from starlette.responses import StreamingResponse
 from ultralytics import YOLO
 import pandas as pd
 from reportlab.lib.pagesizes import letter
@@ -41,6 +43,13 @@ def init_db():
                   truck_id INTEGER,
                   appearance_time TEXT,
                   disappearance_time TEXT)''')
+
+    c.execute('''CREATE TABLE IF NOT EXISTS stream_detections
+                 (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  stream_start TEXT,
+                  stream_end TEXT,
+                  truck_avg_count REAL,
+                  frames_processed INTEGER)''')
     conn.commit()
     conn.close()
 
@@ -153,17 +162,15 @@ async def export_excel(table_name: str):
         raise HTTPException(status_code=400, detail="Invalid table name")
 
     conn = sqlite3.connect('truck_counter.db')
-    # Получаем список существующих таблиц в базе данных
+
     cursor = conn.cursor()
     cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
     existing_tables = [table[0] for table in cursor.fetchall()]
 
-    # Проверяем, существует ли запрашиваемая таблица
     if table_name not in existing_tables:
         conn.close()
         raise HTTPException(status_code=404, detail="Table not found")
 
-    # Если таблица существует, читаем данные
     df = pd.read_sql_query(f"SELECT * FROM {table_name}", conn)
     conn.close()
 
@@ -188,7 +195,6 @@ async def export_pdf_image():
     # Создаем директорию для отчетов, если её нет
     os.makedirs("static/reports", exist_ok=True)
 
-    # Добавляем дату и время к имени файла
     current_time = datetime.now().strftime("%Y%m%d_%H%M%S")
     filename = f"truck_detections_report_{current_time}.pdf"
     pdf_path = f"static/reports/{filename}"
@@ -235,10 +241,8 @@ async def export_pdf_video():
     rows = c.fetchall()
     conn.close()
 
-    # Создаем директорию для отчетов, если её нет
     os.makedirs("static/reports", exist_ok=True)
 
-    # Добавляем дату и время к имени файла
     current_time = datetime.now().strftime("%Y%m%d_%H%M%S")
     filename = f"truck_video_detections_report_{current_time}.pdf"
     pdf_path = f"static/reports/{filename}"
@@ -302,9 +306,14 @@ async def process_video(file: UploadFile = File(...)):
     fourcc = cv2.VideoWriter_fourcc(*'X264')
     out = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
 
-    truck_tracker = {}
-    next_truck_id = 1
+    trucks_info = {}
     frame_count = 0
+    MAX_MISSING_FRAMES = 10  # Максимальное количество кадров, которые грузовик может пропустить
+
+    conn = sqlite3.connect('truck_counter.db')
+    c = conn.cursor()
+
+    request_time = datetime.now().isoformat()
 
     while cap.isOpened():
         ret, frame = cap.read()
@@ -314,78 +323,238 @@ async def process_video(file: UploadFile = File(...)):
         current_time = frame_count / fps
         frame_count += 1
 
-        # обрабатываем каждый второй кадр (для ускорения процесса обработки)
-        # if frame_count % 2 != 0:
-        #     continue
+        results = model.track(frame, persist=True, classes=[7])  # Только грузовики
 
-        results = model(frame)
+        current_truck_ids = set()
+        if results[0].boxes.id is not None:
+            truck_ids = results[0].boxes.id.cpu().numpy().astype(int)
+            boxes = results[0].boxes.xyxy.cpu().numpy().astype(int)
+            confidences = results[0].boxes.conf.cpu().numpy()
 
-        current_truck_positions = []
-        for result in results:
-            boxes = result.boxes
-            for box in boxes:
-                if int(box.cls) == 7:  # Только грузовики
-                    x1, y1, x2, y2 = map(int, box.xyxy[0])
-                    x_center = (x1 + x2) // 2
-                    y_center = (y1 + y2) // 2
+            for truck_id, box, confidence in zip(truck_ids, boxes, confidences):
+                current_truck_ids.add(truck_id)
+                x1, y1, x2, y2 = box
 
-                    cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                cv2.putText(frame, f"Truck {truck_id} {confidence:.2f}",
+                            (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
 
-                    matched = False
-                    for truck_id, data in truck_tracker.items():
-                        last_pos = data['last_position']
-                        dist = ((x_center - last_pos[0]) ** 2 + (y_center - last_pos[1]) ** 2) ** 0.5
-                        if dist < 50:  # Пороговое расстояние для сопоставления
-                            truck_tracker[truck_id]['last_position'] = (x_center, y_center)
-                            truck_tracker[truck_id]['last_seen'] = current_time
-                            current_truck_positions.append((x_center, y_center))
-                            cv2.putText(frame, f"Truck {truck_id}", (x1, y1 - 10),
-                                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
-                            matched = True
-                            break
+                if truck_id not in trucks_info:
+                    trucks_info[truck_id] = {
+                        'first_seen': current_time,
+                        'last_seen': current_time,
+                        'missing_frames': 0
+                    }
+                    c.execute('''INSERT INTO video_detections
+                                (timestamp, video_name, truck_id, appearance_time, disappearance_time)
+                                VALUES (?, ?, ?, ?, ?)''',
+                              (request_time, file.filename, int(truck_id),
+                               current_time, None))
+                else:
+                    trucks_info[truck_id]['last_seen'] = current_time
+                    trucks_info[truck_id]['missing_frames'] = 0  # Сбрасываем счетчик пропущенных кадров
 
-                    if not matched:
-                        truck_id = next_truck_id
-                        next_truck_id += 1
-                        truck_tracker[truck_id] = {
-                            'first_seen': current_time,
-                            'last_seen': current_time,
-                            'last_position': (x_center, y_center)
-                        }
-                        cv2.putText(frame, f"Truck {truck_id}", (x1, y1 - 10),
-                                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+        # Обрабатываем грузовики, которые не были обнаружены в текущем кадре
+        for truck_id in list(trucks_info.keys()):
+            if truck_id not in current_truck_ids:
+                trucks_info[truck_id]['missing_frames'] += 1
+
+                # Если грузовик не появлялся слишком долго, считаем его исчезнувшим
+                if trucks_info[truck_id]['missing_frames'] > MAX_MISSING_FRAMES:
+                    c.execute('''UPDATE video_detections
+                                SET disappearance_time = ?
+                                WHERE video_name = ? AND truck_id = ? AND timestamp = ? AND disappearance_time IS NULL''',
+                              (trucks_info[truck_id]['last_seen'], file.filename, int(truck_id), request_time))
+                    del trucks_info[truck_id]  # Удаляем из отслеживания
 
         out.write(frame)
+        conn.commit()
 
-    cap.release()
-    out.release()
+    # После окончания видео фиксируем исчезновение оставшихся грузовиков
+    for truck_id, info in trucks_info.items():
+        c.execute('''UPDATE video_detections
+                    SET disappearance_time = ?
+                    WHERE video_name = ? AND truck_id = ? AND timestamp = ? AND disappearance_time IS NULL''',
+                  (info['last_seen'], file.filename, int(truck_id), request_time))
+    conn.commit()
 
     detection_data = []
-
-    conn = sqlite3.connect('truck_counter.db')
-    c = conn.cursor()
-    for truck_id, data in truck_tracker.items():
+    c.execute('''SELECT truck_id, appearance_time, disappearance_time 
+                    FROM video_detections WHERE video_name = ? AND timestamp = ?''', (file.filename, request_time))
+    for row in c.fetchall():
         detection_data.append({
-            "truck_id": truck_id,
-            "appearance_time": data['first_seen'],
-            "disappearance_time": data['last_seen']
+            "truck_id": row[0],
+            "appearance_time": row[1],
+            "disappearance_time": row[2]
         })
 
-        c.execute('''INSERT INTO video_detections
-                     (timestamp, video_name, truck_id, appearance_time, disappearance_time)
-                     VALUES (?, ?, ?, ?, ?)''',
-                  (datetime.now().isoformat(), file.filename, truck_id,
-                   data['first_seen'], data['last_seen']))
-    conn.commit()
     conn.close()
+    cap.release()
+    out.release()
 
     return JSONResponse({
         "message": "Video processed successfully",
         "processed_video": f"/static/results/processed_{file.filename}",
-        # "trucks_detected": len(truck_tracker),
         "detection_data": detection_data
     })
 
+
+video_lock = Lock()
+# Глобальные переменные для управления стримами
+active_streams = {}
+stream_stats = {}
+
+
+@app.get("/stream_feed")
+async def stream_feed(request: Request, stream_id: str):
+    if stream_id in active_streams:
+        raise HTTPException(status_code=400, detail="Stream with this ID already exists")
+
+    active_streams[stream_id] = True
+    stream_stats[stream_id] = {
+        'total_trucks': 0,
+        'frame_count': 0,
+        'start_time': datetime.now().isoformat()
+    }
+
+    def generate_frames():
+        cap = cv2.VideoCapture(0)
+        try:
+            while active_streams.get(stream_id, False):
+                ret, frame = cap.read()
+                if not ret:
+                    break
+
+                results = model.track(frame, classes=[7])  # Только грузовики
+
+                truck_count = 0
+                if results[0].boxes.id is not None:
+                    truck_count = len(results[0].boxes)
+
+                with video_lock:
+                    stream_stats[stream_id]['total_trucks'] += truck_count
+                    stream_stats[stream_id]['frame_count'] += 1
+
+                if results[0].boxes.id is not None:
+                    boxes = results[0].boxes.xyxy.cpu().numpy().astype(int)
+                    confidences = results[0].boxes.conf.cpu().numpy()
+
+                    for box, confidence in zip(boxes, confidences):
+                        x1, y1, x2, y2 = box
+                        cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                        cv2.putText(frame, f"Truck {confidence:.2f}",
+                                    (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+
+                ret, buffer = cv2.imencode('.jpg', frame)
+                frame = buffer.tobytes()
+
+                yield (b'--frame\r\n'
+                       b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
+        finally:
+            cap.release()
+
+    return StreamingResponse(generate_frames(), media_type="multipart/x-mixed-replace;boundary=frame")
+
+
+@app.get("/stop_stream/{stream_id}")
+async def stop_stream(stream_id: str):
+    if stream_id in active_streams:
+        active_streams[stream_id] = False
+        stats = stream_stats[stream_id]
+        if stats['frame_count'] > 0:
+            avg_trucks = stats['total_trucks'] / stats['frame_count']
+            end_time = datetime.now().isoformat()
+
+            conn = sqlite3.connect('truck_counter.db')
+            c = conn.cursor()
+            c.execute('''INSERT INTO stream_detections
+                          (stream_start, stream_end, truck_avg_count, frames_processed)
+                          VALUES (?, ?, ?, ?)''',
+                      (stats['start_time'], end_time, avg_trucks, stats['frame_count']))
+            conn.commit()
+            conn.close()
+
+        del stream_stats[stream_id]
+
+        return {"message": f"Stream {stream_id} stopped"}
+    else:
+        raise HTTPException(status_code=404, detail="Stream not found")
+
+
+@app.get("/stream_history")
+async def get_stream_history():
+    conn = sqlite3.connect('truck_counter.db')
+    c = conn.cursor()
+    c.execute("SELECT * FROM stream_detections ORDER BY stream_start DESC")
+    rows = c.fetchall()
+    conn.close()
+
+    history = []
+    for row in rows:
+        history.append({
+            "id": row[0],
+            "stream_start": row[1],
+            "stream_end": row[2],
+            "truck_avg_count": row[3],
+            "frames_processed": row[4]
+        })
+
+    return JSONResponse(history)
+
+
+@app.get("/export/pdf/stream")
+async def export_pdf_stream():
+    conn = sqlite3.connect('truck_counter.db')
+    c = conn.cursor()
+    c.execute("SELECT id, stream_start, stream_end, truck_avg_count, frames_processed FROM stream_detections")
+    rows = c.fetchall()
+    conn.close()
+
+    os.makedirs("static/reports", exist_ok=True)
+    current_time = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = f"stream_detections_report_{current_time}.pdf"
+    pdf_path = f"static/reports/{filename}"
+
+    c = canvas.Canvas(pdf_path, pagesize=letter)
+    c.setFont("Helvetica-Bold", 16)
+    c.drawString(100, 750, "Stream Detection Report")
+    c.setFont("Helvetica", 12)
+    c.drawString(100, 730, f"Generated on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+
+    y = 700
+    x_id = 50
+    x_start = x_id + 30
+    x_end = x_start + 150
+    x_avg = x_end + 130
+    x_frames = x_avg + 80
+
+    # Headers
+    c.drawString(x_id, y, "ID")
+    c.drawString(x_start, y, "Start Time")
+    c.drawString(x_end, y, "End Time")
+    c.drawString(x_avg, y, "Avg Trucks")
+    c.drawString(x_frames, y, "Frames")
+
+    y -= 20
+    for row in rows:
+        c.drawString(x_id, y, str(row[0]))
+
+        start_dt = datetime.fromisoformat(row[1])
+        c.drawString(x_start, y, start_dt.strftime("%d.%m.%Y %H:%M:%S"))
+
+        end_dt = datetime.fromisoformat(row[2])
+        c.drawString(x_end, y, end_dt.strftime("%d.%m.%Y %H:%M:%S"))
+
+        c.drawString(x_avg, y, f"{row[3]:.2f}")
+        c.drawString(x_frames, y, str(row[4]))
+
+        y -= 15
+        if y < 50:
+            c.showPage()
+            y = 750
+
+    c.save()
+    return FileResponse(pdf_path, filename=filename)
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)
