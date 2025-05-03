@@ -35,7 +35,7 @@ def init_db():
                   filename TEXT,
                   truck_count INTEGER,
                   detection_data TEXT)''')
-    # Новая таблица для трекинга грузовиков в видео
+
     c.execute('''CREATE TABLE IF NOT EXISTS video_detections
                  (id INTEGER PRIMARY KEY AUTOINCREMENT,
                   timestamp TEXT,
@@ -111,180 +111,6 @@ async def upload_image(file: UploadFile = File(...)):
         "processed_image": f"/static/results/{file.filename}",
         "detections": detection_data
     })
-
-
-@app.get("/history")
-async def get_history():
-    conn = sqlite3.connect('truck_counter.db')
-    c = conn.cursor()
-    c.execute("SELECT * FROM detections ORDER BY timestamp DESC")
-    rows = c.fetchall()
-    conn.close()
-
-    history = []
-    for row in rows:
-        history.append({
-            "id": row[0],
-            "timestamp": row[1],
-            "filename": row[2],
-            "truck_count": row[3],
-            "detection_data": json.loads(row[4])
-        })
-
-    return JSONResponse(history)
-
-
-@app.get("/video_history")
-async def get_history():
-    conn = sqlite3.connect('truck_counter.db')
-    c = conn.cursor()
-    c.execute("SELECT * FROM video_detections ORDER BY timestamp DESC")
-    rows = c.fetchall()
-    conn.close()
-
-    history = []
-    for row in rows:
-        history.append({
-            "id": row[0],
-            "timestamp": row[1],
-            "video_name": row[2],
-            "truck_id": row[3],
-            "appearance_time": row[4],
-            "disappearance_time": row[5]
-        })
-
-    return JSONResponse(history)
-
-
-@app.get("/export/excel/{table_name}")
-async def export_excel(table_name: str):
-    if not table_name.isidentifier():
-        raise HTTPException(status_code=400, detail="Invalid table name")
-
-    conn = sqlite3.connect('truck_counter.db')
-
-    cursor = conn.cursor()
-    cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
-    existing_tables = [table[0] for table in cursor.fetchall()]
-
-    if table_name not in existing_tables:
-        conn.close()
-        raise HTTPException(status_code=404, detail="Table not found")
-
-    df = pd.read_sql_query(f"SELECT * FROM {table_name}", conn)
-    conn.close()
-
-    os.makedirs("static/reports", exist_ok=True)
-
-    current_time = datetime.now().strftime("%Y%m%d_%H%M%S")
-    filename = f"truck_{table_name}_report_{current_time}.xlsx"
-    excel_path = f"static/reports/{filename}"
-    df.to_excel(excel_path, index=False)
-
-    return FileResponse(excel_path, filename=f"{filename}")
-
-
-@app.get("/export/pdf/image")
-async def export_pdf_image():
-    conn = sqlite3.connect('truck_counter.db')
-    c = conn.cursor()
-    c.execute("SELECT id, timestamp, filename, truck_count FROM detections")
-    rows = c.fetchall()
-    conn.close()
-
-    # Создаем директорию для отчетов, если её нет
-    os.makedirs("static/reports", exist_ok=True)
-
-    current_time = datetime.now().strftime("%Y%m%d_%H%M%S")
-    filename = f"truck_detections_report_{current_time}.pdf"
-    pdf_path = f"static/reports/{filename}"
-    c = canvas.Canvas(pdf_path, pagesize=letter)
-
-    c.setFont("Helvetica-Bold", 16)
-    c.drawString(100, 750, "Truck Detection Report")
-    c.setFont("Helvetica", 12)
-    c.drawString(100, 730, f"Generated on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-
-    y = 700
-    x_id = 100
-    x_timestamp = 150
-    x_filename = 350
-    x_truck_count = 500
-    c.drawString(x_id, y, "id")
-    c.drawString(x_timestamp, y, "Timestamp")
-    c.drawString(x_filename, y, "Filename")
-    c.drawString(x_truck_count, y, "Truck Count")
-
-    y -= 20
-    for row in rows:
-        c.drawString(x_id, y, str(row[0]))
-        dt = datetime.fromisoformat(row[1])
-        formatted_date = dt.strftime("%d.%m.%Y, %H:%M:%S")
-        c.drawString(x_timestamp, y, formatted_date)
-        c.drawString(x_filename, y, row[2])
-        c.drawString(x_truck_count, y, str(row[3]))
-        y -= 15
-        if y < 50:
-            c.showPage()
-            y = 750
-
-    c.save()
-
-    return FileResponse(pdf_path, filename=f"{filename}")
-
-
-@app.get("/export/pdf/video")
-async def export_pdf_video():
-    conn = sqlite3.connect('truck_counter.db')
-    c = conn.cursor()
-    c.execute("SELECT id, timestamp, video_name, truck_id, appearance_time, disappearance_time FROM video_detections")
-    rows = c.fetchall()
-    conn.close()
-
-    os.makedirs("static/reports", exist_ok=True)
-
-    current_time = datetime.now().strftime("%Y%m%d_%H%M%S")
-    filename = f"truck_video_detections_report_{current_time}.pdf"
-    pdf_path = f"static/reports/{filename}"
-    c = canvas.Canvas(pdf_path, pagesize=letter)
-
-    c.setFont("Helvetica-Bold", 16)
-    c.drawString(100, 750, "Truck Video Detection Report")
-    c.setFont("Helvetica", 12)
-    c.drawString(100, 730, f"Generated on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-
-    y = 700
-    x_id = 10
-    x_timestamp = x_id + 15
-    x_video_name = x_timestamp + 120
-    x_truck_id = x_video_name + 185
-    x_appearance_time = x_truck_id + 50
-    x_disappearance_time = x_appearance_time + 110
-    c.drawString(x_id, y, "id")
-    c.drawString(x_timestamp, y, "Timestamp")
-    c.drawString(x_video_name, y, "Video name")
-    c.drawString(x_truck_id, y, "Truck id")
-    c.drawString(x_appearance_time, y, "Appearance time")
-    c.drawString(x_disappearance_time, y, "Disappearance time")
-
-    y -= 20
-    for row in rows:
-        c.drawString(x_id, y, str(row[0]))
-        dt = datetime.fromisoformat(row[1])
-        formatted_date = dt.strftime("%d.%m.%Y, %H:%M:%S")
-        c.drawString(x_timestamp, y, formatted_date)
-        c.drawString(x_video_name, y, row[2])
-        c.drawString(x_truck_id, y, str(row[3]))
-        c.drawString(x_appearance_time, y, row[4])
-        c.drawString(x_disappearance_time, y, row[5])
-        y -= 15
-        if y < 50:
-            c.showPage()
-            y = 750
-
-    c.save()
-
-    return FileResponse(pdf_path, filename=f"{filename}")
 
 
 @app.post("/process_video")
@@ -481,6 +307,49 @@ async def stop_stream(stream_id: str):
         raise HTTPException(status_code=404, detail="Stream not found")
 
 
+@app.get("/history")
+async def get_history():
+    conn = sqlite3.connect('truck_counter.db')
+    c = conn.cursor()
+    c.execute("SELECT * FROM detections ORDER BY timestamp DESC")
+    rows = c.fetchall()
+    conn.close()
+
+    history = []
+    for row in rows:
+        history.append({
+            "id": row[0],
+            "timestamp": row[1],
+            "filename": row[2],
+            "truck_count": row[3],
+            "detection_data": json.loads(row[4])
+        })
+
+    return JSONResponse(history)
+
+
+@app.get("/video_history")
+async def get_history():
+    conn = sqlite3.connect('truck_counter.db')
+    c = conn.cursor()
+    c.execute("SELECT * FROM video_detections ORDER BY timestamp DESC")
+    rows = c.fetchall()
+    conn.close()
+
+    history = []
+    for row in rows:
+        history.append({
+            "id": row[0],
+            "timestamp": row[1],
+            "video_name": row[2],
+            "truck_id": row[3],
+            "appearance_time": row[4],
+            "disappearance_time": row[5]
+        })
+
+    return JSONResponse(history)
+
+
 @app.get("/stream_history")
 async def get_stream_history():
     conn = sqlite3.connect('truck_counter.db')
@@ -500,6 +369,137 @@ async def get_stream_history():
         })
 
     return JSONResponse(history)
+
+
+@app.get("/export/excel/{table_name}")
+async def export_excel(table_name: str):
+    if not table_name.isidentifier():
+        raise HTTPException(status_code=400, detail="Invalid table name")
+
+    conn = sqlite3.connect('truck_counter.db')
+
+    cursor = conn.cursor()
+    cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
+    existing_tables = [table[0] for table in cursor.fetchall()]
+
+    if table_name not in existing_tables:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Table not found")
+
+    df = pd.read_sql_query(f"SELECT * FROM {table_name}", conn)
+    conn.close()
+
+    os.makedirs("static/reports", exist_ok=True)
+
+    current_time = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = f"truck_{table_name}_report_{current_time}.xlsx"
+    excel_path = f"static/reports/{filename}"
+    df.to_excel(excel_path, index=False)
+
+    return FileResponse(excel_path, filename=f"{filename}")
+
+
+@app.get("/export/pdf/image")
+async def export_pdf_image():
+    conn = sqlite3.connect('truck_counter.db')
+    c = conn.cursor()
+    c.execute("SELECT id, timestamp, filename, truck_count FROM detections")
+    rows = c.fetchall()
+    conn.close()
+
+    # Создаем директорию для отчетов, если её нет
+    os.makedirs("static/reports", exist_ok=True)
+
+    current_time = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = f"truck_detections_report_{current_time}.pdf"
+    pdf_path = f"static/reports/{filename}"
+    c = canvas.Canvas(pdf_path, pagesize=letter)
+
+    c.setFont("Helvetica-Bold", 16)
+    c.drawString(100, 750, "Truck Detection Report")
+    c.setFont("Helvetica", 12)
+    c.drawString(100, 730, f"Generated on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+
+    y = 700
+    x_id = 100
+    x_timestamp = 150
+    x_filename = 350
+    x_truck_count = 500
+    c.drawString(x_id, y, "id")
+    c.drawString(x_timestamp, y, "Timestamp")
+    c.drawString(x_filename, y, "Filename")
+    c.drawString(x_truck_count, y, "Truck Count")
+
+    y -= 20
+    for row in rows:
+        c.drawString(x_id, y, str(row[0]))
+        dt = datetime.fromisoformat(row[1])
+        formatted_date = dt.strftime("%d.%m.%Y, %H:%M:%S")
+        c.drawString(x_timestamp, y, formatted_date)
+        c.drawString(x_filename, y, row[2])
+        c.drawString(x_truck_count, y, str(row[3]))
+        y -= 15
+        if y < 50:
+            c.showPage()
+            y = 750
+
+    c.save()
+
+    return FileResponse(pdf_path, filename=f"{filename}")
+
+
+@app.get("/export/pdf/video")
+async def export_pdf_video():
+    conn = sqlite3.connect('truck_counter.db')
+    c = conn.cursor()
+    c.execute("SELECT id, timestamp, video_name, truck_id, appearance_time, disappearance_time FROM video_detections")
+    rows = c.fetchall()
+    conn.close()
+
+    os.makedirs("static/reports", exist_ok=True)
+
+    current_time = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = f"truck_video_detections_report_{current_time}.pdf"
+    pdf_path = f"static/reports/{filename}"
+    c = canvas.Canvas(pdf_path, pagesize=letter)
+
+    c.setFont("Helvetica-Bold", 16)
+    c.drawString(100, 750, "Truck Video Detection Report")
+    c.setFont("Helvetica", 12)
+    c.drawString(100, 730, f"Generated on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+
+    y = 700
+    x_id = 10
+    x_timestamp = x_id + 15
+    x_video_name = x_timestamp + 120
+    x_truck_id = x_video_name + 185
+    x_appearance_time = x_truck_id + 50
+    x_disappearance_time = x_appearance_time + 110
+    c.drawString(x_id, y, "id")
+    c.drawString(x_timestamp, y, "Timestamp")
+    c.drawString(x_video_name, y, "Video name")
+    c.drawString(x_truck_id, y, "Truck id")
+    c.drawString(x_appearance_time, y, "Appearance time")
+    c.drawString(x_disappearance_time, y, "Disappearance time")
+
+    y -= 20
+    for row in rows:
+        c.drawString(x_id, y, str(row[0]))
+        dt = datetime.fromisoformat(row[1])
+        formatted_date = dt.strftime("%d.%m.%Y, %H:%M:%S")
+        c.drawString(x_timestamp, y, formatted_date)
+        c.drawString(x_video_name, y, row[2])
+        c.drawString(x_truck_id, y, str(row[3]))
+        c.drawString(x_appearance_time, y, row[4])
+        c.drawString(x_disappearance_time, y, row[5])
+        y -= 15
+        if y < 50:
+            c.showPage()
+            y = 750
+
+    c.save()
+
+    return FileResponse(pdf_path, filename=f"{filename}")
 
 
 @app.get("/export/pdf/stream")
