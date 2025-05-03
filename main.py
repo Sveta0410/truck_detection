@@ -258,8 +258,11 @@ async def stream_feed(request: Request, stream_id: str):
                     truck_count = len(results[0].boxes)
 
                 with video_lock:
-                    stream_stats[stream_id]['total_trucks'] += truck_count
-                    stream_stats[stream_id]['frame_count'] += 1
+                    if stream_id in stream_stats: # на последней итерации чтобы не возникала ошибка
+                        stream_stats[stream_id]['total_trucks'] += truck_count
+                        stream_stats[stream_id]['frame_count'] += 1
+                    else:
+                        break
 
                 if results[0].boxes.id is not None:
                     boxes = results[0].boxes.xyxy.cpu().numpy().astype(int)
